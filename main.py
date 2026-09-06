@@ -1,10 +1,13 @@
-from fastapi import FastAPI
+import os
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import uvicorn
+import openai
 
 app = FastAPI()
 
-# Structure des données envoyées par MT5
+# Récupération de la clé API depuis les variables d'environnement Render
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+
 class MarketData(BaseModel):
     symbol: str
     timeframe: str
@@ -16,20 +19,52 @@ class MarketData(BaseModel):
 
 @app.get("/")
 def home():
-    return {"status": "ok", "message": "Serveur de test MT5 opérationnel"}
+    return {"status": "Server is active"}
 
 @app.post("/analyze")
-def analyze(data: MarketData):
-    print(f"Données reçues de MT5 pour {data.symbol} ({data.timeframe}) : Prix={data.close}, RSI={data.rsi}")
-    
-    # Simulation d'un signal fictif pour tester la réponse
-    return {
-        "signal": "BUY",
-        "confidence": 85,
-        "sl": round(data.close * 0.99, 5),
-        "tp": round(data.close * 1.02, 5),
-        "reason": "Test de connexion réussi entre MT5 et Render"
-    }
+def analyze_market(data: MarketData):
+    if not OPENAI_API_KEY:
+        # Fallback de test si la clé n'est pas configurée
+        return {
+            "signal": "NEUTRAL",
+            "confidence": 0,
+            "sl": 0.0,
+            "tp": 0.0,
+            "reason": "OPENAI_API_KEY non configurée dans l'environnement Render."
+        }
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+    prompt = f"""
+    Tu es un expert en trading algorithmique et en Smart Money Concepts (SMC).
+    Analyse les données techniques suivantes pour l'actif {data.symbol} sur l'unité de temps {data.timeframe} :
+    - Prix de clôture : {data.close}
+    - RSI (14) : {data.rsi}
+    - EMA 20 : {data.ema20}
+    - EMA 50 : {data.ema50}
+    - Structure du marché : {data.structure}
+
+    Réponds UNIQUEMENT sous forme d'un objet JSON strict avec la structure suivante :
+    {{
+      "signal": "BUY" | "SELL" | "NEUTRAL",
+      "confidence": nombre entre 0 et 100,
+      "sl": prix_stop_loss,
+      "tp": prix_take_profit,
+      "reason": "Explication courte en 1 phrase"
+    }}
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        
+        import json
+        result = json.loads(response.choices[0].message.content)
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
